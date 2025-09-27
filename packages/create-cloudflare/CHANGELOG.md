@@ -1,5 +1,21 @@
 # create-cloudflare
 
+## 2.52.0
+
+### Minor Changes
+
+- [#10700](https://github.com/cloudflare/workers-sdk/pull/10700) [`8e05701`](https://github.com/cloudflare/workers-sdk/commit/8e05701f9b350612ba58e0883035b1fb1651787d) Thanks [@dario-piotrowicz](https://github.com/dario-piotrowicz)! - Remove the Remix option since the framework is no longer recommended by the Remix team for new applications
+
+### Patch Changes
+
+- [#10567](https://github.com/cloudflare/workers-sdk/pull/10567) [`64e403b`](https://github.com/cloudflare/workers-sdk/commit/64e403ba8cfc1c2ea53ef2405787cd1bf64d064a) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency | From  | To    |
+  | ---------- | ----- | ----- |
+  | sv         | 0.9.2 | 0.9.6 |
+
 ## 2.51.7
 
 ### Patch Changes
