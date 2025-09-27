@@ -1,0 +1,106 @@
+// src/worker/index.ts
+// Cloudflare Worker: Push subscription storage (D1) + notification endpoint
+// Requires: wrangler.json has D1 binding "DB"
+// Secrets: VAPID_PRIVATE_KEY, VAPID_PUBLIC_KEY
+// Dependencies: web-push (npm install web-push)
+
+export interface Env {
+  DB: D1Database;
+  VAPID_PRIVATE_KEY: string;
+  VAPID_PUBLIC_KEY: string;
+}
+
+type SubscriptionRecord = {
+  id?: number;
+  endpoint: string;
+  keys_p256dh: string;
+  keys_auth: string;
+  created_at?: string;
+};
+
+async function ensureSchema(DB: D1Database) {
+  await DB.exec(`
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      endpoint TEXT UNIQUE NOT NULL,
+      keys_p256dh TEXT NOT NULL,
+      keys_auth TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+}
+
+export default {
+  async fetch(request: Request, env: Env) {
+    const url = new URL(request.url);
+    await ensureSchema(env.DB);
+
+    // Save subscription
+    if (request.method === 'POST' && url.pathname === '/subscribe') {
+      const body = await request.json();
+      const sub = body as PushSubscriptionJSON;
+      if (!sub?.endpoint || !sub.keys?.p256dh || !sub.keys?.auth) {
+        return new Response(JSON.stringify({ error: 'Invalid subscription' }), { status: 400 });
+      }
+      try {
+        await env.DB.prepare(
+          'INSERT OR IGNORE INTO subscriptions (endpoint, keys_p256dh, keys_auth) VALUES (?1, ?2, ?3)'
+        ).bind(sub.endpoint, sub.keys.p256dh, sub.keys.auth).run();
+        return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json' } });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: (e as Error).message }), { status: 500 });
+      }
+    }
+
+    // Send notifications to all subscribers
+    if (request.method === 'POST' && url.pathname === '/notify') {
+      const body = await request.json().catch(() => ({}));
+      const title = body.title ?? 'BumpTalk';
+      const message = body.body ?? 'New update';
+      const data = body.data ?? {};
+
+      // Load subscribers
+      const rows = await env.DB.prepare('SELECT endpoint, keys_p256dh, keys_auth FROM subscriptions').all<SubscriptionRecord>();
+      const subs = rows.results ?? [];
+
+      // web-push (Node compat, must be installed)
+      // @ts-ignore
+      const webpush = await import('web-push').catch(() => null);
+      if (!webpush) {
+        return new Response(JSON.stringify({ error: 'web-push not bundled. Add it to dependencies.' }), { status: 500 });
+      }
+      // @ts-ignore
+      webpush.setVapidDetails('mailto:admin@bumptalk.app', env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY);
+
+      const payload = JSON.stringify({ title, body: message, data });
+      const results: any[] = [];
+
+      for (const s of subs) {
+        const subscription = {
+          endpoint: s.endpoint,
+          keys: { p256dh: s.keys_p256dh, auth: s.keys_auth }
+        };
+        try {
+          // @ts-ignore
+          await webpush.sendNotification(subscription, payload);
+          results.push({ endpoint: s.endpoint, ok: true });
+        } catch (err) {
+          results.push({ endpoint: s.endpoint, ok: false, error: String(err) });
+          // Clean up if subscription is gone
+          if ((err as any)?.statusCode === 410) {
+            await env.DB.prepare('DELETE FROM subscriptions WHERE endpoint = ?1').bind(s.endpoint).run();
+          }
+        }
+      }
+
+      return new Response(JSON.stringify({ sent: results.length, results }), { headers: { 'content-type': 'application/json' } });
+    }
+
+    // Health check
+    if (request.method === 'GET' && url.pathname === '/health') {
+      return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json' } });
+    }
+
+    return new Response('Not Found', { status: 404 });
+  }
+};
